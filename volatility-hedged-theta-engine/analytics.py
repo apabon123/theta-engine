@@ -418,6 +418,100 @@ class Analytics:
         # Display portfolio totals in single line
         self.algorithm.Debug("PORTFOLIO TOTALS:")
         self.algorithm.Debug(f"  DDelta: ${ddelta_total:,.0f} | DGamma: ${dgamma_total:,.0f} | DTheta: ${dtheta_total:,.0f} | DVega: ${dvega_total:,.0f}")
+        
+        # Generate PnL explanation if PnL explainer is available
+        self._generate_pnl_explanation(option_positions, hedge_positions)
+
+    def _generate_pnl_explanation(self, option_positions: List[Dict], hedge_positions: List[Dict]):
+        """
+        Generate detailed PnL explanation using PnL Explainer module.
+        
+        Args:
+            option_positions: List of option position dictionaries
+            hedge_positions: List of hedge position dictionaries
+        """
+        try:
+            # Check if PnL explainer is available
+            if not hasattr(self.algorithm, 'pnl_explainer'):
+                # Initialize PnL explainer if not exists
+                from .pnl_explainer import PnLExplainer
+                self.algorithm.pnl_explainer = PnLExplainer(self.algorithm)
+            
+            # Get current QuantConnect portfolio value
+            qc_portfolio_value = float(self.algorithm.Portfolio.TotalPortfolioValue)
+            
+            # Generate PnL explanation
+            explanation = self.algorithm.pnl_explainer.explain_daily_pnl(
+                date=self.algorithm.Time,
+                option_positions=option_positions,
+                hedge_positions=hedge_positions,
+                qc_portfolio_value=qc_portfolio_value
+            )
+            
+            # Generate and log the PnL report
+            pnl_report = self.algorithm.pnl_explainer.generate_pnl_report(self.algorithm.Time)
+            
+            # Log the PnL explanation
+            self.algorithm.Debug("")
+            self.algorithm.Debug("=" * 80)
+            self.algorithm.Debug("PnL EXPLANATION")
+            self.algorithm.Debug("=" * 80)
+            
+            # Log key metrics
+            qc_rec = explanation['qc_reconciliation']
+            self.algorithm.Debug(f"📊 QUANTCONNECT RECONCILIATION:")
+            self.algorithm.Debug(f"  QC Portfolio Value: ${qc_rec['qc_portfolio_value']:,.2f}")
+            self.algorithm.Debug(f"  QC Daily PnL: ${qc_rec['qc_daily_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Attributed PnL: ${qc_rec['attributed_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Variance: ${qc_rec['variance']:,.2f} ({qc_rec['variance_pct']:.1f}%)")
+            self.algorithm.Debug(f"  Quality: {qc_rec['reconciliation_quality']}")
+            
+            # Option PnL breakdown
+            opt_pnl = explanation['option_pnl']
+            self.algorithm.Debug(f"\n📈 OPTION PnL BREAKDOWN:")
+            self.algorithm.Debug(f"  Total Option PnL: ${opt_pnl['total_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Delta PnL: ${opt_pnl['total_delta_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Gamma PnL: ${opt_pnl['total_gamma_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Theta PnL: ${opt_pnl['total_theta_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Vega PnL: ${opt_pnl['total_vega_pnl']:,.2f}")
+            
+            # Individual option positions
+            if opt_pnl['positions']:
+                self.algorithm.Debug(f"\n  Individual Option Positions:")
+                for pos in opt_pnl['positions']:
+                    self.algorithm.Debug(f"    {pos['symbol']}: ${pos['total_pnl']:,.2f}")
+                    self.algorithm.Debug(f"      Delta: ${pos['delta_pnl']:,.2f}, Gamma: ${pos['gamma_pnl']:,.2f}")
+                    self.algorithm.Debug(f"      Theta: ${pos['theta_pnl']:,.2f}, Vega: ${pos['vega_pnl']:,.2f}")
+            
+            # Hedge PnL breakdown
+            hedge_pnl = explanation['hedge_pnl']
+            self.algorithm.Debug(f"\n🛡️ HEDGE PnL BREAKDOWN:")
+            self.algorithm.Debug(f"  Total Hedge PnL: ${hedge_pnl['total_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Price PnL: ${hedge_pnl['total_price_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Dividend PnL: ${hedge_pnl['total_dividend_pnl']:,.2f}")
+            self.algorithm.Debug(f"  Borrowing Cost: ${hedge_pnl['total_borrowing_cost']:,.2f}")
+            
+            # Individual hedge positions
+            if hedge_pnl['positions']:
+                self.algorithm.Debug(f"\n  Individual Hedge Positions:")
+                for pos in hedge_pnl['positions']:
+                    self.algorithm.Debug(f"    {pos['symbol']}: ${pos['total_pnl']:,.2f}")
+                    self.algorithm.Debug(f"      Price PnL: ${pos['price_pnl']:,.2f}")
+            
+            # Summary
+            self.algorithm.Debug(f"\n📋 SUMMARY:")
+            self.algorithm.Debug(f"  Total Attributed PnL: ${explanation['total_attributed_pnl']:,.2f}")
+            if explanation['total_attributed_pnl'] != 0:
+                opt_contrib = opt_pnl['total_pnl']/explanation['total_attributed_pnl']*100
+                hedge_contrib = hedge_pnl['total_pnl']/explanation['total_attributed_pnl']*100
+                self.algorithm.Debug(f"  Option Contribution: {opt_contrib:.1f}%")
+                self.algorithm.Debug(f"  Hedge Contribution: {hedge_contrib:.1f}%")
+            
+            self.algorithm.Debug("=" * 80)
+            
+        except Exception as e:
+            self.algorithm.Debug(f"PnL Explanation Error: {str(e)}")
+            # Continue without PnL explanation if there's an error
 
     def delta_bands(self):
         """
