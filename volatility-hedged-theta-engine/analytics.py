@@ -459,7 +459,7 @@ class Analytics:
             
             # Log key metrics
             qc_rec = explanation['qc_reconciliation']
-            self.algorithm.Debug(f"📊 QUANTCONNECT RECONCILIATION:")
+            self.algorithm.Debug(f"QUANTCONNECT RECONCILIATION:")
             self.algorithm.Debug(f"  QC Portfolio Value: ${qc_rec['qc_portfolio_value']:,.2f}")
             self.algorithm.Debug(f"  QC Daily PnL: ${qc_rec['qc_daily_pnl']:,.2f}")
             self.algorithm.Debug(f"  Attributed PnL: ${qc_rec['attributed_pnl']:,.2f}")
@@ -468,7 +468,7 @@ class Analytics:
             
             # Option PnL breakdown
             opt_pnl = explanation['option_pnl']
-            self.algorithm.Debug(f"\n📈 OPTION PnL BREAKDOWN:")
+            self.algorithm.Debug(f"\nOPTION PnL BREAKDOWN:")
             self.algorithm.Debug(f"  Total Option PnL: ${opt_pnl['total_pnl']:,.2f}")
             self.algorithm.Debug(f"  Delta PnL: ${opt_pnl['total_delta_pnl']:,.2f}")
             self.algorithm.Debug(f"  Gamma PnL: ${opt_pnl['total_gamma_pnl']:,.2f}")
@@ -485,7 +485,7 @@ class Analytics:
             
             # Hedge PnL breakdown
             hedge_pnl = explanation['hedge_pnl']
-            self.algorithm.Debug(f"\n🛡️ HEDGE PnL BREAKDOWN:")
+            self.algorithm.Debug(f"\nHEDGE PnL BREAKDOWN:")
             self.algorithm.Debug(f"  Total Hedge PnL: ${hedge_pnl['total_pnl']:,.2f}")
             self.algorithm.Debug(f"  Price PnL: ${hedge_pnl['total_price_pnl']:,.2f}")
             self.algorithm.Debug(f"  Dividend PnL: ${hedge_pnl['total_dividend_pnl']:,.2f}")
@@ -499,7 +499,7 @@ class Analytics:
                     self.algorithm.Debug(f"      Price PnL: ${pos['price_pnl']:,.2f}")
             
             # Summary
-            self.algorithm.Debug(f"\n📋 SUMMARY:")
+            self.algorithm.Debug(f"\nSUMMARY:")
             self.algorithm.Debug(f"  Total Attributed PnL: ${explanation['total_attributed_pnl']:,.2f}")
             if explanation['total_attributed_pnl'] != 0:
                 opt_contrib = opt_pnl['total_pnl']/explanation['total_attributed_pnl']*100

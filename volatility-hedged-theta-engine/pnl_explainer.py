@@ -438,7 +438,7 @@ class PnLExplainer:
         
         # QC Reconciliation
         qc_rec = explanation['qc_reconciliation']
-        report.append(f"\n📊 QUANTCONNECT RECONCILIATION:")
+        report.append(f"\nQUANTCONNECT RECONCILIATION:")
         report.append(f"  QC Portfolio Value: ${qc_rec['qc_portfolio_value']:,.2f}")
         report.append(f"  QC Daily PnL: ${qc_rec['qc_daily_pnl']:,.2f}")
         report.append(f"  Attributed PnL: ${qc_rec['attributed_pnl']:,.2f}")
@@ -447,7 +447,7 @@ class PnLExplainer:
         
         # Option PnL Breakdown
         opt_pnl = explanation['option_pnl']
-        report.append(f"\n📈 OPTION PnL BREAKDOWN:")
+        report.append(f"\nOPTION PnL BREAKDOWN:")
         report.append(f"  Total Option PnL: ${opt_pnl['total_pnl']:,.2f}")
         report.append(f"  Delta PnL: ${opt_pnl['total_delta_pnl']:,.2f}")
         report.append(f"  Gamma PnL: ${opt_pnl['total_gamma_pnl']:,.2f}")
@@ -464,7 +464,7 @@ class PnLExplainer:
         
         # Hedge PnL Breakdown
         hedge_pnl = explanation['hedge_pnl']
-        report.append(f"\n🛡️ HEDGE PnL BREAKDOWN:")
+        report.append(f"\nHEDGE PnL BREAKDOWN:")
         report.append(f"  Total Hedge PnL: ${hedge_pnl['total_pnl']:,.2f}")
         report.append(f"  Price PnL: ${hedge_pnl['total_price_pnl']:,.2f}")
         report.append(f"  Dividend PnL: ${hedge_pnl['total_dividend_pnl']:,.2f}")
@@ -479,12 +479,12 @@ class PnLExplainer:
         
         # Performance Metrics
         metrics = explanation['performance_metrics']
-        report.append(f"\n📊 PERFORMANCE METRICS:")
+        report.append(f"\nPERFORMANCE METRICS:")
         report.append(f"  Attribution Accuracy: {metrics['attribution_accuracy']:.1f}%")
         report.append(f"  Hedge Effectiveness: {metrics['hedge_effectiveness']['effectiveness_score']:.1f}%")
         
         # Summary
-        report.append(f"\n📋 SUMMARY:")
+        report.append(f"\nSUMMARY:")
         report.append(f"  Total Attributed PnL: ${explanation['total_attributed_pnl']:,.2f}")
         report.append(f"  Option Contribution: {opt_pnl['total_pnl']/explanation['total_attributed_pnl']*100:.1f}%")
         report.append(f"  Hedge Contribution: {hedge_pnl['total_pnl']/explanation['total_attributed_pnl']*100:.1f}%")

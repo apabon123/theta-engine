@@ -1,4 +1,4 @@
-2014-12-31 15:55:00 Launching analysis for 13e9bd2155ee64b34771de8d36b4eb42 with LEAN Engine v2.5.0.0.17319
+2014-12-31 15:55:00 Launching analysis for 251aa54ae821697132ff5809121d71ec with LEAN Engine v2.5.0.0.17341
 2014-12-31 15:55:00 Warning: SetBenchmark(QQQ): no existing symbol found, benchmark security will be added with Equity type.
 2014-12-31 15:55:00 SetOptionAssignmentModel not available in this QuantConnect version (skipping)
 2014-12-31 15:55:00 Accurate daily end-times now enabled by default. See more at https://qnt.co/3YHaWHL. To disable it and use legacy daily bars set self.settings.daily_precise_end_time = False.
