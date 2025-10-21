@@ -3,22 +3,25 @@ Theta Engine Modules Package
 
 This package contains modular components for the Theta Engine strategy:
 - delta_hedging: Universal delta hedging for equity and futures options
-- black_scholes: Black-Scholes calculations and Greeks estimation
+- greeks_provider: Greeks calculation and caching
 - exit_rules: Exit conditions and position management
-- execution_modes: EOD vs Intraday execution logic
 - position_management: Position sizing and entry logic
+- risk_manager: Risk management and margin calculations
+- analytics: Portfolio analytics and reporting
 """
 
 from .delta_hedging import DeltaHedger
-from .black_scholes import BlackScholesCalculator
+from .greeks_provider import GreeksProvider
 from .exit_rules import ExitRulesManager
-from .execution_modes import ExecutionModeManager
 from .position_management import PositionManager
+from .risk_manager import RiskManager
+from .analytics import Analytics
 
 __all__ = [
     'DeltaHedger',
-    'BlackScholesCalculator',
+    'GreeksProvider',
     'ExitRulesManager',
-    'ExecutionModeManager',
-    'PositionManager'
+    'PositionManager',
+    'RiskManager',
+    'Analytics'
 ]

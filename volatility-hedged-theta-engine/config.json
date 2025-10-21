@@ -1,7 +1,8 @@
 {
-    "algorithm-language": "Python",
-    "parameters": {},
-    "description": "",
-    "organization-id": "d06d2cac1f32652eb65ca29b7c725e2f",
-    "cloud-id": 24828340
+  "algorithm-language": "Python",
+  "parameters": {},
+  "description": "",
+  "organization-id": "d06d2cac1f32652eb65ca29b7c725e2f",
+  "cloud-id": 24828340,
+  "strategy_module": "volatility-hedged-theta-engine.theta_engine"
 }

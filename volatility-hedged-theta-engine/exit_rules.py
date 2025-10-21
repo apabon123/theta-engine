@@ -19,34 +19,41 @@ class ExitRulesManager:
         if not self.algorithm.positions:
             return
 
+        # CRITICAL FIX: Don't check exits during warmup
+        if self.algorithm.IsWarmingUp:
+            return
+
         positions_to_close = []
 
         for pos_id, position in self.algorithm.positions.items():
             symbol = position['symbol']
+
+            # FIX: Skip hedge positions - they don't have expirations and are rebalanced elsewhere
+            if position.get('is_hedge', False):
+                continue
+
+            # EARLY GUARD: Skip zero-quantity placeholders
+            if abs(position.get('quantity', 0)) == 0:
+                continue
 
             if symbol not in self.algorithm.Securities:
                 self.algorithm.Debug(f"Position {pos_id} no longer in securities, forcing close")
                 positions_to_close.append((pos_id, "Symbol Removed", 0))
                 continue
 
-            # Use BBO mid for options to avoid zero prices in Daily mode
-            if symbol.SecurityType == SecurityType.Option:
-                current_price = self.algorithm.GetOptionEodPrice(symbol)
-                if current_price <= 0:
-                    # Skip this position for now; don't force-close on missing mid
-                    self.algorithm.Debug(f"Skip exit: no EOD mid for {symbol}")
-                    continue
-            else:
-                current_price = self.algorithm.Securities[symbol].Price
-                if current_price == 0:
-                    self.algorithm.Debug(f"Position {pos_id} has zero price, forcing close")
-                    positions_to_close.append((pos_id, "Zero Price", 0))
-                    continue
+            # Use real market price from Security at minute resolution
+            current_price = self.algorithm.Securities[symbol].Price
+            if current_price <= 0:
+                self.algorithm.Debug(f"Skip exit: no valid price for {symbol}")
+                continue
 
             entry_price = position['entry_price']
 
+            # FIX: Only multiply by 100 for options, not equities
+            is_option = (symbol.SecurityType == SecurityType.Option)
+            mult = 100 if is_option else 1
             pnl_per_contract = entry_price - current_price
-            total_pnl = pnl_per_contract * abs(position['quantity']) * 100
+            total_pnl = pnl_per_contract * abs(position['quantity']) * mult
             credit_received = position['credit_received']
 
             try:
@@ -63,16 +70,19 @@ class ExitRulesManager:
 
             exit_reason = None
 
+            # FIX: Use absolute value of credit_received to handle negative credits properly
+            credit_abs = abs(credit_received)
+
             # Exit conditions (in priority order)
             if dte <= 2 and current_price <= entry_price * self.algorithm.let_expire_threshold:
                 exit_reason = "Let Expire"
-            elif total_pnl >= credit_received * self.algorithm.quick_profit_target and dte > self.algorithm.quick_profit_min_dte:
+            elif total_pnl >= credit_abs * self.algorithm.quick_profit_target and dte > self.algorithm.quick_profit_min_dte:
                 exit_reason = f"Quick Profit ({self.algorithm.quick_profit_target:.0%})"
-            elif total_pnl >= credit_received * self.algorithm.normal_profit_target:
+            elif total_pnl >= credit_abs * self.algorithm.normal_profit_target:
                 exit_reason = f"Profit Target ({self.algorithm.normal_profit_target:.0%})"
-            elif total_pnl <= -credit_received * self.algorithm.stop_loss_multiplier:
+            elif total_pnl <= -credit_abs * self.algorithm.stop_loss_multiplier:
                 exit_reason = f"Stop Loss ({self.algorithm.stop_loss_multiplier:.0%})"
-            elif dte < self.algorithm.time_stop_dte and total_pnl < credit_received * self.algorithm.quick_profit_target:
+            elif dte < self.algorithm.time_stop_dte and total_pnl < credit_abs * self.algorithm.quick_profit_target:
                 # Time stop: if <15 DTE and not at quick profit target, reduce risk
                 if self.algorithm.time_stop_action == "ROLL":
                     exit_reason = f"Time Stop (<{self.algorithm.time_stop_dte} DTE, rolling)"
@@ -82,10 +92,28 @@ class ExitRulesManager:
                 exit_reason = "Rolling"
 
             if exit_reason:
-                positions_to_close.append((pos_id, exit_reason, total_pnl))
+                # Calculate expected P&L based on exit reason
+                if "Profit" in exit_reason:
+                    # For profit exits, expected P&L is positive (we made money)
+                    expected_pnl = credit_abs * (1 if "Quick" in exit_reason else 1)  # Both quick and normal are positive
+                elif "Stop Loss" in exit_reason:
+                    # For stop losses, expected P&L is negative (we lost money)
+                    expected_pnl = -credit_abs * self.algorithm.stop_loss_multiplier
+                elif "Time Stop" in exit_reason:
+                    # For time stops, expected P&L depends on current profit level
+                    current_profit_pct = total_pnl / credit_abs if credit_abs > 0 else 0
+                    expected_pnl = credit_abs * current_profit_pct
+                elif "Let Expire" in exit_reason:
+                    # For let expire, expected P&L is current profit/loss
+                    expected_pnl = total_pnl
+                else:
+                    # Default: use the credit received as positive for shorts
+                    expected_pnl = credit_abs if position.get('quantity', 0) < 0 else -credit_abs
 
-        for pos_id, reason, pnl in positions_to_close:
-            self.close_position(pos_id, reason, pnl)
+                positions_to_close.append((pos_id, exit_reason, expected_pnl))
+
+        for pos_id, reason, expected_pnl in positions_to_close:
+            self.close_position(pos_id, reason, expected_pnl)
 
     def close_position(self, position_id, reason, expected_pnl):
         """Close position and track performance"""
@@ -96,31 +124,142 @@ class ExitRulesManager:
         symbol = position['symbol']
 
         try:
-            # Use BBO mid for option exits
-            if symbol.SecurityType == SecurityType.Option:
-                exit_price = self.algorithm.GetOptionEodPrice(symbol)
-            else:
-                exit_price = self.algorithm.Securities[symbol].Price if symbol in self.algorithm.Securities else 0.0
+            # Use real market price from Security for logging and P&L
+            exit_price = self.algorithm.Securities[symbol].Price if symbol in self.algorithm.Securities else 0.0
 
             # Guard against zero prices - refuse to send order at $0.00
             if exit_price <= 0:
-                self.algorithm.Debug(f"Abort close: no valid exit price for {symbol}")
+                if self.algorithm.debug_mode:
+                    self.algorithm.Debug(f"Abort close: no valid exit price for {symbol}")
                 return
 
             exit_price = round(exit_price, 2)
 
-            # Calculate actual P&L
-            pnl_per_contract = position['entry_price'] - exit_price
-            actual_pnl = pnl_per_contract * abs(position['quantity']) * 100
+            # CRITICAL FIX: Check if security is tradable before placing order
+            if symbol in self.algorithm.Securities and not self.algorithm.Securities[symbol].IsTradable:
+                # Implement retry logic instead of immediate deletion
+                retry_count = position.get('close_retry_count', 0) + 1
+                position['close_retry_count'] = retry_count
 
-            # Place closing order
-            if not self.algorithm.intraday_hedging:
-                # EOD: use limit orders
-                ticket = self.algorithm.LimitOrder(symbol, -position['quantity'], exit_price)
-                self.algorithm.Debug(f"EOD CLOSE: {symbol} LIMIT @ ${exit_price:.2f}")
-            else:
-                # Intraday: market orders
-                ticket = self.algorithm.MarketOrder(symbol, -position['quantity'])
+                retry_limit = self.algorithm.nontradable_retry_limit
+                if retry_count >= retry_limit:  # Allow configurable retries before giving up
+                    if self.algorithm.debug_mode:
+                        self.algorithm.Debug(f"Close failed {retry_limit}x: removing non-tradable {symbol} from tracking")
+                    # Remove from tracking since we can't close it after multiple attempts
+                    if position_id in self.algorithm.positions:
+                        del self.algorithm.positions[position_id]
+                    return
+                else:
+                    if self.algorithm.debug_mode:
+                        self.algorithm.Debug(f"Close retry {retry_count}/{retry_limit}: {symbol} not tradable, will retry later")
+                    return
+
+            # FIX: Calculate actual P&L with correct multiplier
+            is_option = (symbol.SecurityType == SecurityType.Option)
+            mult = 100 if is_option else 1
+            pnl_per_contract = position['entry_price'] - exit_price
+            actual_pnl = pnl_per_contract * abs(position['quantity']) * mult
+
+            # CRITICAL FIX: Validate that the position actually exists and has non-zero quantity
+            if abs(position['quantity']) < 1e-6:
+                if self.algorithm.debug_mode:
+                    self.algorithm.Debug(f"Abort close: position {position_id} has zero quantity, removing from tracking")
+                del self.algorithm.positions[position_id]
+                return
+            
+            # Calculate close quantity (opposite of current position)
+            close_quantity = -position['quantity']
+            if abs(close_quantity) < 1e-6:
+                if self.algorithm.debug_mode:
+                    self.algorithm.Debug(f"Abort close: calculated close quantity is zero for {symbol}")
+                return
+
+            # Place closing limit order using current bid/ask quotes
+            try:
+                qty = int(round(close_quantity))
+                if qty == 0:
+                    if self.algorithm.debug_mode:
+                        self.algorithm.Debug(f"Abort close: rounded to zero quantity for {symbol}")
+                    del self.algorithm.positions[position_id]
+                    return
+
+                # Get current quotes from security
+                sec = self.algorithm.Securities[symbol]
+                bid = float(getattr(sec, "BidPrice", 0) or 0)
+                ask = float(getattr(sec, "AskPrice", 0) or 0)
+
+                # Validate quotes with retry logic
+                quote_retry_count = position.get('quote_retry_count', 0)
+
+                if bid <= 0 or ask <= 0:
+                    quote_retry_count += 1
+                    position['quote_retry_count'] = quote_retry_count
+
+                    retry_limit = self.algorithm.quote_retry_limit
+                    if quote_retry_count >= retry_limit:  # Allow configurable retries for bad quotes
+                        if self.algorithm.debug_mode:
+                            self.algorithm.Debug(f"Close abandoned after {quote_retry_count} quote failures: {symbol}")
+                        return
+                    else:
+                        if self.algorithm.debug_mode:
+                            self.algorithm.Debug(f"Quote retry {quote_retry_count}/{retry_limit}: {symbol} missing quotes, will retry next cycle")
+                        return
+
+                # Check for unreasonably wide spreads
+                mid = (bid + ask) / 2
+                spread_pct = abs(ask - bid) / mid if mid > 0 else 1.0
+                if spread_pct > self.algorithm.exit_max_spread_pct:  # Configurable spread threshold
+                    quote_retry_count += 1
+                    position['quote_retry_count'] = quote_retry_count
+
+                    retry_limit = self.algorithm.spread_retry_limit
+                    if quote_retry_count >= retry_limit:  # Allow configurable retries for wide spreads
+                        if self.algorithm.debug_mode:
+                            self.algorithm.Debug(f"Close abandoned after {quote_retry_count} wide spread failures: {symbol} ({spread_pct:.1%})")
+                        return
+                    else:
+                        if self.algorithm.debug_mode:
+                            self.algorithm.Debug(f"Spread retry {quote_retry_count}/{retry_limit}: {symbol} wide spread ({spread_pct:.1%}), will retry next cycle")
+                        return
+
+                # Reset retry count on successful quote validation
+                position['quote_retry_count'] = 0
+
+                # Calculate limit price using same logic as MidHaircutFillModel for consistency
+                # This ensures limit price matches expected fill price (mid ± haircut*spread)
+                haircut_fraction = self.algorithm.mid_haircut_fraction  # Same as fill model
+                spread = ask - bid
+                
+                if qty > 0:  # Buying back (closing short position)
+                    # Use mid + haircut*spread (same as fill model for buys)
+                    limit_price = mid + haircut_fraction * spread
+                    # Clamp to book bounds for realism
+                    limit_price = min(max(limit_price, bid), ask)
+                else:  # Selling (closing long position)
+                    # Use mid - haircut*spread (same as fill model for sells)
+                    limit_price = mid - haircut_fraction * spread
+                    # Clamp to book bounds for realism
+                    limit_price = min(max(limit_price, bid), ask)
+
+                # Final validation
+                if limit_price <= 0:
+                    if self.algorithm.debug_mode:
+                        self.algorithm.Debug(f"Skip close {symbol}: invalid limit price {limit_price}")
+                    return
+
+                # Place limit order with EXIT tag for identification
+                ticket = self.algorithm.LimitOrder(symbol, qty, round(limit_price, 2), tag=self.algorithm.EXIT_TAG)
+                if self.algorithm.debug_mode:
+                    self.algorithm.Debug(f"EXIT limit order: {symbol} {qty:+d} @ ${limit_price:.2f} (bid={bid}, ask={ask})")
+                
+                # CRITICAL FIX: Execute delta hedge immediately when exit order is placed
+                # This is cleaner than waiting for the fill and avoids double-counting
+                self.algorithm._execute_exit_delta_hedge(symbol, qty, reason)
+            except Exception as e:
+                if self.algorithm.debug_mode:
+                    self.algorithm.Debug(f"Error placing close order for {symbol}: {e}")
+                return
+
 
             if ticket.Status in (OrderStatus.Submitted, OrderStatus.Filled):
                 # Update performance tracking
@@ -140,14 +279,20 @@ class ExitRulesManager:
                 except:
                     dte_for_log = "N/A"
                 
+                # expected_pnl is already calculated in check_exit_conditions and passed as parameter
+
                 self.algorithm.Log(f"POSITION EXIT: {symbol} | {reason} | "
                                 f"Entry: ${position['entry_price']:.2f} | "
                                 f"Exit: ${exit_price:.2f} | "
-                                f"P&L: ${actual_pnl:.2f} | "
+                                f"Actual P&L: ${actual_pnl:.2f} | "
                                 f"DTE: {dte_for_log}")
 
-                # Remove from tracking
-                del self.algorithm.positions[position_id]
+                # CRITICAL FIX: Don't delete position until order actually fills
+                # Position will be updated when the order fills in OnOrderEvent
+                # Only delete if order failed to submit
+                if ticket.Status == OrderStatus.Invalid:
+                    if position_id in self.algorithm.positions:
+                        del self.algorithm.positions[position_id]
 
             else:
                 self.algorithm.Debug(f"Position close failed for {symbol}: {ticket.Status}")
@@ -173,12 +318,15 @@ class ExitRulesManager:
             current_date = self.algorithm.Time.date() if hasattr(self.algorithm.Time, 'date') else self.algorithm.Time
             dte = (expiry_date - current_date).days
 
+            # FIX: Use absolute value for credit comparisons
+            credit_abs = abs(credit_received)
+
             # Roll conditions
             if dte <= self.algorithm.min_dte:
                 return True, "Minimum DTE reached"
-            elif dte < self.algorithm.time_stop_dte and total_pnl < credit_received * self.algorithm.quick_profit_target:
+            elif dte < self.algorithm.time_stop_dte and total_pnl < credit_abs * self.algorithm.quick_profit_target:
                 return True, f"Time stop at {dte} DTE"
-            elif total_pnl <= -credit_received * self.algorithm.stop_loss_multiplier * 0.5:
+            elif total_pnl <= -credit_abs * self.algorithm.stop_loss_multiplier * 0.5:
                 return True, "Partial stop loss - rolling to cut risk"
 
             return False, ""
@@ -200,18 +348,22 @@ class ExitRulesManager:
             current_date = self.algorithm.Time.date() if hasattr(self.algorithm.Time, 'date') else self.algorithm.Time
             dte = (expiry_date - current_date).days
 
-            # P&L calculations
+            # FIX: P&L calculations with correct multiplier
+            is_option = (position['symbol'].SecurityType == SecurityType.Option)
+            mult = 100 if is_option else 1
             pnl_per_contract = entry_price - current_price
-            total_pnl = pnl_per_contract * abs(quantity) * 100
-            pnl_pct = total_pnl / credit_received if credit_received > 0 else 0
+            total_pnl = pnl_per_contract * abs(quantity) * mult
+            # FIX: Use absolute value for credit comparisons
+            credit_abs = abs(credit_received)
+            pnl_pct = total_pnl / credit_abs if credit_abs > 0 else 0
 
             # Risk metrics
-            max_loss = credit_received * self.algorithm.stop_loss_multiplier
+            max_loss = credit_abs * self.algorithm.stop_loss_multiplier
             current_loss_pct = -total_pnl / max_loss if max_loss > 0 else 0
 
             # Profit targets
-            quick_profit_level = credit_received * self.algorithm.quick_profit_target
-            normal_profit_level = credit_received * self.algorithm.normal_profit_target
+            quick_profit_level = credit_abs * self.algorithm.quick_profit_target
+            normal_profit_level = credit_abs * self.algorithm.normal_profit_target
 
             return {
                 'pnl_total': total_pnl,
