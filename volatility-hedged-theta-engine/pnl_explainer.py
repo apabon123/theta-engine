@@ -32,6 +32,7 @@ class PnLExplainer:
         self.algorithm = algorithm
         self.daily_pnl_history = []
         self.position_snapshots = {}
+        self.underlying_prices = {}  # Track underlying prices by date
         
     def explain_daily_pnl(self, date: datetime, option_positions: List[Dict], 
                          hedge_positions: List[Dict], qc_portfolio_value: float) -> Dict:
@@ -48,9 +49,13 @@ class PnLExplainer:
             Dictionary with detailed PnL attribution
         """
         
+        # Get underlying price information
+        underlying_info = self._get_underlying_price_info(option_positions, hedge_positions)
+        
         explanation = {
             'date': date,
             'qc_portfolio_value': qc_portfolio_value,
+            'underlying_info': underlying_info,
             'option_pnl': self._analyze_option_pnl(option_positions),
             'hedge_pnl': self._analyze_hedge_pnl(hedge_positions),
             'total_attributed_pnl': 0.0,
@@ -108,11 +113,14 @@ class PnLExplainer:
             entry_price = pos.get('entry_price', 0)
             current_price = self._get_current_option_price(symbol)
             
-            # Get Greeks from position data
+            # Get Greeks from position data (calculated/attributed greeks)
             delta = pos.get('delta_usd', 0) / (qty * 100) if qty != 0 else 0
             gamma = pos.get('gamma_usd', 0) / (qty * 100) if qty != 0 else 0
             theta = pos.get('theta_usd', 0) / qty if qty != 0 else 0
             vega = pos.get('vega_usd', 0) / qty if qty != 0 else 0
+            
+            # Get QC raw greeks for comparison
+            qc_raw_greeks = self._get_qc_raw_greeks(symbol)
             
             # Calculate price changes
             price_change = current_price - entry_price if entry_price > 0 else 0
@@ -141,7 +149,8 @@ class PnLExplainer:
                     'gamma': gamma,
                     'theta': theta,
                     'vega': vega
-                }
+                },
+                'qc_raw_greeks': qc_raw_greeks
             }
             
             option_analysis['positions'].append(position_analysis)
@@ -279,25 +288,110 @@ class PnLExplainer:
         
         return metrics
     
+    def _get_underlying_price_info(self, option_positions: List[Dict], hedge_positions: List[Dict]) -> Dict:
+        """
+        Get underlying price information including current price, previous day price, change, and change %.
+        
+        Returns:
+            Dictionary with underlying price information by symbol
+        """
+        underlying_info = {}
+        
+        # Get underlyings from option positions
+        for pos in option_positions:
+            symbol = pos['symbol']
+            if hasattr(symbol, 'Underlying'):
+                underlying_symbol = symbol.Underlying
+            else:
+                # Try to extract underlying from hedge positions or algorithm
+                continue
+                
+            if underlying_symbol not in underlying_info:
+                current_price = self._get_current_underlying_price(underlying_symbol)
+                previous_price = self._get_previous_underlying_price(underlying_symbol)
+                
+                price_change = current_price - previous_price if previous_price > 0 else 0
+                price_change_pct = (price_change / previous_price * 100) if previous_price > 0 else 0
+                
+                underlying_info[underlying_symbol] = {
+                    'current_price': current_price,
+                    'previous_price': previous_price,
+                    'price_change': price_change,
+                    'price_change_pct': price_change_pct
+                }
+                
+                # Store current price for next day
+                date_key = self.algorithm.Time.date()
+                if underlying_symbol not in self.underlying_prices:
+                    self.underlying_prices[underlying_symbol] = {}
+                self.underlying_prices[underlying_symbol][date_key] = current_price
+        
+        # Get underlyings from hedge positions
+        for pos in hedge_positions:
+            symbol = pos['symbol']
+            if symbol not in underlying_info:
+                current_price = self._get_current_underlying_price(symbol)
+                previous_price = self._get_previous_underlying_price(symbol)
+                
+                price_change = current_price - previous_price if previous_price > 0 else 0
+                price_change_pct = (price_change / previous_price * 100) if previous_price > 0 else 0
+                
+                underlying_info[symbol] = {
+                    'current_price': current_price,
+                    'previous_price': previous_price,
+                    'price_change': price_change,
+                    'price_change_pct': price_change_pct
+                }
+                
+                # Store current price for next day
+                date_key = self.algorithm.Time.date()
+                if symbol not in self.underlying_prices:
+                    self.underlying_prices[symbol] = {}
+                self.underlying_prices[symbol][date_key] = current_price
+        
+        return underlying_info
+    
+    def _get_previous_underlying_price(self, symbol) -> float:
+        """Get previous day's underlying price"""
+        try:
+            date_key = self.algorithm.Time.date()
+            if symbol in self.underlying_prices:
+                # Get the most recent price before today
+                prices = self.underlying_prices[symbol]
+                sorted_dates = sorted([d for d in prices.keys() if d < date_key], reverse=True)
+                if sorted_dates:
+                    return prices[sorted_dates[0]]
+        except Exception:
+            pass
+        return 0.0
+    
     # Helper methods for PnL calculations
     
     def _calculate_delta_pnl(self, delta: float, qty: int, price_change: float) -> float:
         """Calculate delta PnL: price_change × delta × quantity × 100"""
+        if qty == 0:
+            return 0.0
         return price_change * delta * qty * 100
     
     def _calculate_gamma_pnl(self, gamma: float, qty: int, price_change: float) -> float:
         """Calculate gamma PnL: 0.5 × (price_change)² × gamma × quantity × 100"""
+        if qty == 0:
+            return 0.0
         return 0.5 * (price_change ** 2) * gamma * qty * 100
     
     def _calculate_theta_pnl(self, theta: float, qty: int) -> float:
         """Calculate theta PnL: time_decay × theta × quantity"""
         # Assume 1 day of time decay
+        if qty == 0:
+            return 0.0
         return theta * qty
     
     def _calculate_vega_pnl(self, vega: float, qty: int) -> float:
         """Calculate vega PnL: vol_change × vega × quantity"""
         # This would need actual volatility change data
         # For now, return 0 as we don't have vol change tracking
+        if qty == 0:
+            return 0.0
         return 0.0
     
     def _get_current_option_price(self, symbol) -> float:
@@ -317,6 +411,81 @@ class PnLExplainer:
         except Exception:
             pass
         return 0.0
+    
+    def _get_qc_raw_greeks(self, symbol) -> Dict:
+        """
+        Get QC raw greeks for comparison with calculated greeks.
+        
+        Returns:
+            Dictionary with QC raw greeks and source information
+        """
+        try:
+            # Try to get from Securities first (most direct QC source)
+            if symbol in self.algorithm.Securities:
+                security = self.algorithm.Securities[symbol]
+                if hasattr(security, 'Greeks') and security.Greeks is not None:
+                    greeks = security.Greeks
+                    return {
+                        'delta': float(greeks.Delta) if greeks.Delta is not None else 0.0,
+                        'gamma': float(greeks.Gamma) if greeks.Gamma is not None else 0.0,
+                        'theta': float(greeks.Theta) if greeks.Theta is not None else 0.0,
+                        'vega': float(greeks.Vega) if hasattr(greeks, 'Vega') and greeks.Vega is not None else 0.0,
+                        'source': 'QC-SECURITY'
+                    }
+            
+            # Try cached greeks from options data manager
+            if hasattr(self.algorithm, 'greeks_cache') and symbol in self.algorithm.greeks_cache:
+                cached_data = self.algorithm.greeks_cache[symbol]
+                if len(cached_data) >= 2:
+                    greeks_tuple, timestamp = cached_data
+                    if len(greeks_tuple) >= 4:
+                        delta, gamma, theta, vega = greeks_tuple
+                        return {
+                            'delta': float(delta) if delta is not None else 0.0,
+                            'gamma': float(gamma) if gamma is not None else 0.0,
+                            'theta': float(theta) if theta is not None else 0.0,
+                            'vega': float(vega) if vega is not None else 0.0,
+                            'source': 'QC-CACHED'
+                        }
+                    elif len(greeks_tuple) >= 3:
+                        delta, gamma, theta = greeks_tuple
+                        return {
+                            'delta': float(delta) if delta is not None else 0.0,
+                            'gamma': float(gamma) if gamma is not None else 0.0,
+                            'theta': float(theta) if theta is not None else 0.0,
+                            'vega': 0.0,
+                            'source': 'QC-CACHED'
+                        }
+            
+            # Try options data manager if available
+            if hasattr(self.algorithm, 'options_data'):
+                try:
+                    delta, delta_source = self.algorithm.options_data.get_delta(symbol)
+                    gamma, gamma_source = self.algorithm.options_data.get_gamma(symbol)
+                    theta, theta_source = self.algorithm.options_data.get_theta(symbol)
+                    vega, vega_source = self.algorithm.options_data.get_vega(symbol)
+                    
+                    return {
+                        'delta': float(delta) if delta is not None else 0.0,
+                        'gamma': float(gamma) if gamma is not None else 0.0,
+                        'theta': float(theta) if theta is not None else 0.0,
+                        'vega': float(vega) if vega is not None else 0.0,
+                        'source': f'QC-{delta_source}'
+                    }
+                except Exception:
+                    pass
+                    
+        except Exception:
+            pass
+        
+        # Return zeros if no QC greeks available
+        return {
+            'delta': 0.0,
+            'gamma': 0.0,
+            'theta': 0.0,
+            'vega': 0.0,
+            'source': 'QC-NONE'
+        }
     
     def _get_previous_qc_value(self, date: datetime) -> Optional[float]:
         """Get previous day's QuantConnect portfolio value"""
@@ -340,10 +509,12 @@ class PnLExplainer:
             return {}
         
         largest = max(positions, key=lambda p: abs(p.get('total_pnl', 0)))
+        total_abs_pnl = sum(abs(p.get('total_pnl', 0)) for p in positions)
+        
         return {
             'symbol': largest.get('symbol', ''),
             'pnl': largest.get('total_pnl', 0),
-            'pnl_pct': largest.get('total_pnl', 0) / sum(abs(p.get('total_pnl', 0)) for p in positions) * 100 if positions else 0
+            'pnl_pct': (largest.get('total_pnl', 0) / total_abs_pnl * 100) if total_abs_pnl > 0 else 0
         }
     
     def _calculate_hedge_effectiveness(self, hedge_analysis: Dict) -> float:
@@ -432,63 +603,77 @@ class PnLExplainer:
             return f"No PnL explanation found for {date.date()}"
         
         report = []
-        report.append("=" * 80)
+        report.append("=" * 60)
         report.append(f"PnL EXPLANATION REPORT - {date.strftime('%Y-%m-%d')}")
-        report.append("=" * 80)
+        report.append("=" * 60)
         
-        # QC Reconciliation
+        # Underlying price information
+        underlying_info = explanation.get('underlying_info', {})
+        if underlying_info:
+            for symbol, info in underlying_info.items():
+                symbol_str = str(symbol) if hasattr(symbol, '__str__') else 'QQQ'
+                current = info['current_price']
+                previous = info['previous_price']
+                change = info['price_change']
+                change_pct = info['price_change_pct']
+                report.append(f"UNDERLYING {symbol_str}: ${current:.2f} | Prev: ${previous:.2f} | Change: ${change:+.2f} ({change_pct:+.2f}%)")
+        
+        # QC Reconciliation (condensed)
         qc_rec = explanation['qc_reconciliation']
-        report.append(f"\nQUANTCONNECT RECONCILIATION:")
-        report.append(f"  QC Portfolio Value: ${qc_rec['qc_portfolio_value']:,.2f}")
-        report.append(f"  QC Daily PnL: ${qc_rec['qc_daily_pnl']:,.2f}")
-        report.append(f"  Attributed PnL: ${qc_rec['attributed_pnl']:,.2f}")
-        report.append(f"  Variance: ${qc_rec['variance']:,.2f} ({qc_rec['variance_pct']:.1f}%)")
-        report.append(f"  Quality: {qc_rec['reconciliation_quality']}")
+        report.append(f"QC: ${qc_rec['qc_portfolio_value']:,.0f} | Attributed: ${qc_rec['attributed_pnl']:,.0f} | Var: ${qc_rec['variance']:,.0f} ({qc_rec['variance_pct']:.1f}%) | {qc_rec['reconciliation_quality']}")
         
-        # Option PnL Breakdown
+        # Option PnL breakdown (condensed with prices)
         opt_pnl = explanation['option_pnl']
-        report.append(f"\nOPTION PnL BREAKDOWN:")
-        report.append(f"  Total Option PnL: ${opt_pnl['total_pnl']:,.2f}")
-        report.append(f"  Delta PnL: ${opt_pnl['total_delta_pnl']:,.2f}")
-        report.append(f"  Gamma PnL: ${opt_pnl['total_gamma_pnl']:,.2f}")
-        report.append(f"  Theta PnL: ${opt_pnl['total_theta_pnl']:,.2f}")
-        report.append(f"  Vega PnL: ${opt_pnl['total_vega_pnl']:,.2f}")
+        report.append(f"OPTIONS: Total=${opt_pnl['total_pnl']:,.0f} | Δ=${opt_pnl['total_delta_pnl']:,.0f} | Γ=${opt_pnl['total_gamma_pnl']:,.0f} | Θ=${opt_pnl['total_theta_pnl']:,.0f} | ν=${opt_pnl['total_vega_pnl']:,.0f}")
         
-        # Individual Option Positions
+        # Individual option positions with entry/current prices and QC raw greeks
         if opt_pnl['positions']:
-            report.append(f"\n  Individual Option Positions:")
             for pos in opt_pnl['positions']:
-                report.append(f"    {pos['symbol']}: ${pos['total_pnl']:,.2f}")
-                report.append(f"      Delta: ${pos['delta_pnl']:,.2f}, Gamma: ${pos['gamma_pnl']:,.2f}")
-                report.append(f"      Theta: ${pos['theta_pnl']:,.2f}, Vega: ${pos['vega_pnl']:,.2f}")
+                entry_price = pos.get('entry_price', 0)
+                current_price = pos.get('current_price', 0)
+                price_change = pos.get('price_change', 0)
+                
+                # Get QC raw greeks for comparison
+                qc_raw = pos.get('qc_raw_greeks', {})
+                qc_delta = qc_raw.get('delta', 0.0)
+                qc_gamma = qc_raw.get('gamma', 0.0)
+                qc_theta = qc_raw.get('theta', 0.0)
+                qc_vega = qc_raw.get('vega', 0.0)
+                qc_source = qc_raw.get('source', 'N/A')
+                
+                # Get calculated greeks for comparison
+                calc_delta = pos.get('greeks', {}).get('delta', 0.0)
+                calc_gamma = pos.get('greeks', {}).get('gamma', 0.0)
+                calc_theta = pos.get('greeks', {}).get('theta', 0.0)
+                calc_vega = pos.get('greeks', {}).get('vega', 0.0)
+                
+                report.append(f"  {pos['symbol']}: ${pos['total_pnl']:,.0f} | Entry: ${entry_price:.2f} → Current: ${current_price:.2f} (Δ${price_change:.2f}) | Δ=${pos['delta_pnl']:,.0f} Γ=${pos['gamma_pnl']:,.0f} Θ=${pos['theta_pnl']:,.0f}")
+                report.append(f"    QC Raw: Δ={qc_delta:.4f} Γ={qc_gamma:.6f} Θ={qc_theta:.6f} ν={qc_vega:.6f} ({qc_source})")
+                report.append(f"    Calc'd: Δ={calc_delta:.4f} Γ={calc_gamma:.6f} Θ={calc_theta:.6f} ν={calc_vega:.6f}")
         
-        # Hedge PnL Breakdown
+        # Hedge PnL breakdown (condensed)
         hedge_pnl = explanation['hedge_pnl']
-        report.append(f"\nHEDGE PnL BREAKDOWN:")
-        report.append(f"  Total Hedge PnL: ${hedge_pnl['total_pnl']:,.2f}")
-        report.append(f"  Price PnL: ${hedge_pnl['total_price_pnl']:,.2f}")
-        report.append(f"  Dividend PnL: ${hedge_pnl['total_dividend_pnl']:,.2f}")
-        report.append(f"  Borrowing Cost: ${hedge_pnl['total_borrowing_cost']:,.2f}")
+        if hedge_pnl['total_pnl'] != 0 or hedge_pnl['positions']:
+            report.append(f"HEDGES: Total=${hedge_pnl['total_pnl']:,.0f} | Price=${hedge_pnl['total_price_pnl']:,.0f} | Div=${hedge_pnl['total_dividend_pnl']:,.0f} | Cost=${hedge_pnl['total_borrowing_cost']:,.0f}")
+            
+            # Individual hedge positions with entry/current prices
+            if hedge_pnl['positions']:
+                for pos in hedge_pnl['positions']:
+                    entry_price = pos.get('entry_price', 0)
+                    current_price = pos.get('current_price', 0)
+                    price_change = pos.get('price_change', 0)
+                    report.append(f"  {pos['symbol']}: ${pos['total_pnl']:,.0f} | Entry: ${entry_price:.2f} → Current: ${current_price:.2f} (Δ${price_change:.2f}) | Price=${pos['price_pnl']:,.0f}")
         
-        # Individual Hedge Positions
-        if hedge_pnl['positions']:
-            report.append(f"\n  Individual Hedge Positions:")
-            for pos in hedge_pnl['positions']:
-                report.append(f"    {pos['symbol']}: ${pos['total_pnl']:,.2f}")
-                report.append(f"      Price PnL: ${pos['price_pnl']:,.2f}")
+        # Summary (condensed)
+        total_attributed = explanation['total_attributed_pnl']
         
-        # Performance Metrics
-        metrics = explanation['performance_metrics']
-        report.append(f"\nPERFORMANCE METRICS:")
-        report.append(f"  Attribution Accuracy: {metrics['attribution_accuracy']:.1f}%")
-        report.append(f"  Hedge Effectiveness: {metrics['hedge_effectiveness']['effectiveness_score']:.1f}%")
+        if abs(total_attributed) > 0.01:
+            opt_contrib = opt_pnl['total_pnl'] / total_attributed * 100
+            hedge_contrib = hedge_pnl['total_pnl'] / total_attributed * 100
+            report.append(f"TOTAL: ${total_attributed:,.0f} | Options: {opt_contrib:.0f}% | Hedges: {hedge_contrib:.0f}%")
+        else:
+            report.append(f"TOTAL: ${total_attributed:,.0f} | No PnL attribution")
         
-        # Summary
-        report.append(f"\nSUMMARY:")
-        report.append(f"  Total Attributed PnL: ${explanation['total_attributed_pnl']:,.2f}")
-        report.append(f"  Option Contribution: {opt_pnl['total_pnl']/explanation['total_attributed_pnl']*100:.1f}%")
-        report.append(f"  Hedge Contribution: {hedge_pnl['total_pnl']/explanation['total_attributed_pnl']*100:.1f}%")
-        
-        report.append("=" * 80)
+        report.append("=" * 60)
         
         return "\n".join(report)

@@ -420,10 +420,10 @@ class DeltaHedgedThetaEngine(QCAlgorithm):
                 self.CancelStaleEntryOrders
             )
 
-        # Schedule EOD Greeks logging at market close
+        # Schedule EOD Greeks logging at 16:00 (4 PM market close)
         self.Schedule.On(
             self.DateRules.EveryDay(self.underlying_symbol),
-            self.TimeRules.AfterMarketClose(self.underlying_symbol, 0),  # At market close
+            self.TimeRules.At(16, 0),  # At 4:00 PM
             self.LogEODPosition
         )
 
