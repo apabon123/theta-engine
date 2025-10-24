@@ -36,7 +36,9 @@ All major debugging issues have been resolved. The algorithm is now stable, full
 - ✅ **Clean Logging**: Significantly reduced verbose logging for better readability
 
 ### Analytics & Reporting
-- ✅ Comprehensive EOD reporting with Greeks
+- ✅ Comprehensive EOD reporting with all four Greeks (Delta, Gamma, Theta, Vega)
+- ✅ PnL attribution with underlying price tracking and QC raw Greeks comparison
+- ✅ EOD timing fixed to run at 16:00 (4 PM market close) instead of midnight
 - ✅ Performance tracking and delta bands analysis
 - ✅ NAV-based delta bands with boundary hedging
 
@@ -136,6 +138,9 @@ CHAIN_SNAPSHOT_MAX_ENTRIES = 100
 11. **Options Market Orders**: Fixed intraday risk monitor and P2 rebalancing using Market orders instead of Limit orders
 12. **NAV Mode Base Notional**: Fixed base_notional undefined error when using NAV delta bands
 13. **P1D Hedging Override**: P1D per-trade hedging now properly skips when TRADE bands are inert (was killing equity drift)
+14. **EOD Timing Issue**: Fixed EOD logging to run at 16:00 (4 PM) instead of midnight (00:00)
+15. **Vega Missing from EOD**: Added vega to EOD Greeks logging for complete Greek visibility
+16. **PnL Explainer Enhancement**: Added underlying price tracking (current, previous, change, change %) for troubleshooting
 
 ### Architecture Improvements
 11. **Double Counting Bug**: Portfolio delta calculations double-counting hedge positions
@@ -267,7 +272,21 @@ CHAIN_SNAPSHOT_MAX_ENTRIES = 100
 
 ## 📝 Recent Session Summary
 
-### Latest Session (P1D Hedging Override Bug Fix - CRITICAL)
+### Latest Session (EOD Timing & PnL Explainer Enhancement)
+Fixed EOD timing issues and enhanced PnL explainer for better troubleshooting:
+- **EOD Timing Fix**: Changed EOD Greeks logging from `AfterMarketClose(0)` to `TimeRules.At(16, 0)` to run at 4:00 PM instead of midnight
+- **Vega Addition**: Added vega to EOD Greeks logging line for complete visibility of all four main Greeks (Delta, Gamma, Theta, Vega)
+- **Underlying Price Tracking**: Added underlying price information to PnL explainer showing:
+  - Current underlying price
+  - Previous day's underlying price
+  - Price change ($ and %)
+  - Helps double-check PnL calculations against market movements
+- **Timestamp Debugging**: Added actual algorithm time to EOD debug output to troubleshoot timing issues
+- **Log Format**: EOD Greeks now shows: `Δ={delta:.4f}, Γ={gamma:.6f}, Θ={theta:.6f}, ν={vega:.6f} ({greek_source})`
+- **PnL Report Format**: Now includes: `UNDERLYING QQQ: $103.93 | Prev: $102.14 | Change: $+1.79 (+1.75%)`
+- **Result**: Better visibility for troubleshooting Greek scaling issues and PnL attribution
+
+### Previous Session (P1D Hedging Override Bug Fix - CRITICAL)
 Fixed critical bug where P1D per-trade hedging was still executing and neutralizing deltas despite TRADE bands being configured as "inert":
 - **Root Cause**: `_execute_new_trade_hedges()` was always calling `execute_delta_hedge_for_trade()` regardless of TRADE band settings
 - **Impact**: With target=0 and tol>=1.0, P1D was hedging to zero (`target $0K`) on every trade, killing equity drift across all backtests
@@ -332,7 +351,7 @@ For detailed information, see:
 
 ---
 
-**Status Last Updated**: January 2025  
+**Status Last Updated**: October 2025  
 **Version**: Production-Ready  
 **Next Milestone**: Live deployment preparation
 

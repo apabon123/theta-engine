@@ -23,6 +23,7 @@ A production-ready systematic options trading strategy built for **QuantConnect 
 - ✅ **Dynamic Position Sizing** - Smart margin utilization with 2x scaling
 - ✅ **Performance Optimized** - 99% reduction in processing, 90% memory savings
 - ✅ **Intraday Risk Monitoring** - Real-time margin and loss tracking
+- ✅ **Enhanced PnL Attribution** - Complete Greeks tracking with underlying price movements
 
 ## 🏗️ Architecture
 
@@ -173,6 +174,8 @@ Core Engine       → Orchestration (main.py)
 - ✅ **Consistent Options Execution** - All options orders use Limit orders with custom fill logic
 - ✅ **Market Hours Protection** - Prevents after-hours hedging and MOO conversions
 - ✅ **Professional Risk Management** - Margin-aware sizing with Reg-T estimation
+- ✅ **EOD Timing Fix** - EOD reporting now runs at 16:00 (4 PM) instead of midnight
+- ✅ **Enhanced PnL Explainer** - Added vega tracking and underlying price movement analysis
 
 **See [STATUS.md](STATUS.md) for complete list of recent fixes and enhancements.**
 

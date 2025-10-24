@@ -40,7 +40,8 @@ Data Layer - Unified data access:
 └── option_filters.py         # Centralized option filtering utilities
 
 Analytics Layer - Performance and reporting:
-└── analytics.py           # Performance tracking, delta bands analysis
+├── analytics.py           # Performance tracking, delta bands analysis, EOD Greeks
+└── pnl_explainer.py       # PnL attribution with underlying price tracking
 
 Hedging Layer - Dynamic risk management:
 └── delta_hedging.py       # Universal delta hedging (TRADE/NAV/POINTS modes)
@@ -65,7 +66,8 @@ Core Engine:
 7. **Intraday Risk Monitoring**: `intraday_risk_monitor.check_risk()` → monitors margin utilization and portfolio loss
 8. **Risk Monitoring**: `exit_rules.check_exit_conditions()` → manages exits/rolls
 9. **Data Access**: `greeks_provider.get_delta()` → provides Greeks throughout
-10. **EOD Reporting**: `analytics.log_eod()` → comprehensive portfolio summary
+10. **EOD Reporting (16:00)**: `analytics.log_eod_greeks()` → comprehensive portfolio summary with all four Greeks (Δ, Γ, Θ, ν)
+11. **PnL Attribution**: `pnl_explainer.explain_daily_pnl()` → tracks underlying price movements and Greek contributions
 
 ---
 
@@ -408,10 +410,12 @@ Extend `greeks_provider.py` for additional data providers:
 - Custom Greek calculations
 
 ### Custom Analytics
-Add new metrics to `analytics.py`:
+Add new metrics to `analytics.py` and `pnl_explainer.py`:
 - Additional performance metrics
 - Custom risk measures
 - Portfolio attribution
+- Enhanced PnL breakdown with underlying price tracking
+- Greek contribution analysis (Delta, Gamma, Theta, Vega)
 
 ### Alternative Hedging
 Modify `delta_hedging.py` for different risk management approaches:
@@ -454,7 +458,15 @@ Adjust cache sizes and cleanup intervals in `config.py`:
 ### Implementation Modules
 - `options_data_manager.py`: Throttling logic, data source hierarchy
 - `data_processor.py`: OnData timing gates, execution phase control
-- `analytics.py`: Greeks consumption, EOD reporting
+- `analytics.py`: Greeks consumption, EOD reporting with all four Greeks (Δ, Γ, Θ, ν)
+- `pnl_explainer.py`: PnL attribution with underlying price tracking and QC raw Greeks comparison
+
+### EOD Reporting Enhancement
+- **Timing**: EOD logs now run at 16:00 (4 PM market close) instead of midnight
+- **Complete Greeks**: All four main Greeks (Delta, Gamma, Theta, Vega) logged for each position
+- **Underlying Price Tracking**: Shows current price, previous day price, change, and change %
+- **QC Raw Greeks**: PnL explainer compares calculated Greeks vs QC raw Greeks for troubleshooting
+- **Format**: `UNDERLYING QQQ: $103.93 | Prev: $102.14 | Change: $+1.79 (+1.75%)`
 
 See module docstrings for comprehensive technical documentation.
 
